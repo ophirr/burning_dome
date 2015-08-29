@@ -96,8 +96,8 @@ void loop() {
   // Set the last button state to the old state.
   oldState = newState;
 
-  brightVal  = analogRead(POT1);  // range is 0 - 523
-  int pot2 = analogRead(POT2);    // range is 0 - 525
+  brightVal  = analogRead(POT2);  // range is 0 - 523
+  int frequency = analogRead(POT1);    // range is 0 - 525
 //  Serial.print("brightval = ");
 //  Serial.print(brightVal);
 //  Serial.print("   |    pot2 = ");
@@ -110,10 +110,11 @@ void loop() {
 //    oldBright = brightVal;
 //  }
 
-    brightness = map(brightVal, 0, 523, 1, 255);
-   //strip.setBrightness(brightness);
-   // changing color instead
-   neoPixel_j = brightness;
+   brightness = map(brightVal, 0, 523, 1, 250);
+   strip.setBrightness(brightness);
+   
+   frequency = map(frequency, 0, 525, 1, 255);
+   neoPixel_j = frequency;
 }
 
 
