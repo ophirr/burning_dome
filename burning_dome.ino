@@ -362,12 +362,14 @@ void checkSchedule() {
     // Window just opened -- turn on
     scheduledOff = false;
     orbOn = true;
+    strip.setBrightness(brightnessVal);
     resetAnimationState();
     if (DEBUG_ENABLED) Serial.println("Schedule: turning ON");
   } else if (!inWindow && !scheduledOff) {
     // Window just closed -- turn off
     scheduledOff = true;
     orbOn = false;
+    strip.setBrightness(0);
     allColor(0);
     if (DEBUG_ENABLED) Serial.println("Schedule: turning OFF");
   }
@@ -648,8 +650,10 @@ void handleSetPower() {
   if (server.hasArg("on")) {
     orbOn = server.arg("on").toInt() == 1;
     if (!orbOn) {
+      strip.setBrightness(0);
       allColor(0);
     } else {
+      strip.setBrightness(brightnessVal);
       resetAnimationState();
     }
   }
