@@ -1,0 +1,2 @@
+- 2026-07-10 16:12 | ota -> 192.168.5.185 | 5879a8c-dirty | fqbn=esp8266:esp8266:nodemcuv2 | 404352 bytes
+- 2026-07-10 16:32 | ota -> 192.168.5.185 | 5879a8c-dirty | fqbn=esp8266:esp8266:nodemcuv2 | 405408 bytes

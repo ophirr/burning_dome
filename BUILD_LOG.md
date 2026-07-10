@@ -21,6 +21,41 @@ measurement data inline, where attempt N+1 will read it.
 
 ---
 
+## 2026-07-10 - bricked the orb over OTA, recovered over serial
+
+### An OTA image carrying an UNVERIFIED WiFi SSID (one wrong letter of case) stranded an OTA-only device - (uncommitted)
+config.h had `WIFI_SSID "Tizonet"`; the real network is `TizoNet`. SSIDs
+are case-sensitive, so after the OTA reboot the ESP could not associate,
+dropped off WiFi, and became unreachable (OTA is the only update path
+once assembled). The password was fine (OTA auth had proven it). Root
+cause: I pushed a config change I had never verified, to a device I
+could only reach over the air. Recovery required opening the enclosure
+and reflashing over FTDI serial.
+**Lesson: OTA is safe for CODE on a proven config, NEVER for an unverified config/credential change. Any change to WiFi creds/SSID must be flashed over serial FIRST, where the boot log confirms association, before it is ever eligible for OTA. A wrong SSID strands an OTA-only device exactly like a bad image.**
+
+### I theorized "flash-layout mismatch" for an hour; the serial boot log said the truth in one line - (uncommitted)
+I confidently attributed the brick to an OTA flash-size/layout mismatch
+(I had compiled for nodemcuv2 without checking the chip). Wrong: the
+chip is 4 MB, the image was 4 MB, `/flashinfo` later reported
+`match:true`. The serial boot log showed `Connecting....` then 40 dots
+then `Status:` != 3 - a plain WiFi association failure. I burned time on
+a theory instead of reading the primary artifact.
+**Lesson: on any embedded failure, get the serial boot log BEFORE theorizing. `Status:` / IP / RSSI lines disambiguate WiFi-vs-crash-vs-layout in seconds; a plausible story about flash layout does not.**
+
+### Guardrail so it cannot recur: /flashinfo canary + gated flash.sh + PreToolUse hook - (uncommitted)
+Three layers now stand between a convenient flash and a brick:
+(1) firmware `/flashinfo` exposes real vs configured flash size
+(`match`) so a genuine layout mismatch is queryable over the air;
+(2) `flash.sh` is the only sanctioned flasher - serial-first, and its
+OTA path preflights `/flashinfo` (aborts unless match=true, image fits,
+chip size == pinned FQBN) then re-checks after; (3) a PreToolUse hook
+blocks raw `espota.py` / `arduino-cli upload` / `esptool write-flash`
+so the gate cannot be skipped. Verified target facts pinned in
+HARDWARE.md (HUZZAH ESP8266, 4 MB, FTDI + GPIO0/RESET, TizoNet).
+**Lesson: after a self-inflicted deploy failure, the fix is not "be more careful" - it is infrastructure that makes the careless path impossible (a hook), plus a canary that makes the failure observable (/flashinfo), plus a pinned source of truth for the target (HARDWARE.md).**
+
+---
+
 ## 2026-07-10 - weather-alarm throb glow (WATG-1/2/3)
 
 ### Open-Meteo's JSON carries `weathercode` TWICE; the naive `indexOf` reads the wrong one - (uncommitted)

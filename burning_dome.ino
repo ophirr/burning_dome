@@ -83,12 +83,15 @@ unsigned long lastScheduleCheck = 0;
 #define ALARM_THROB_MS   (30UL * 60UL * 1000UL)  // 30-minute throb window
 #define WEATHER_PREFETCH_MIN  30                 // fetch this many min before alarm
 #define THROB_TICK_MS    40                      // fast ticker while throbbing (smooth sine)
-#define THROB_PERIOD_MS  3000.0f                 // one throb cycle
+#define THROB_PERIOD_DEFAULT 3000                // ms per throb cycle (runtime-adjustable via /setthrob)
+#define THROB_PERIOD_MIN 1000                    // 1 s = brisk
+#define THROB_PERIOD_MAX 8000                    // 8 s = very slow/gentle
 #define THROB_FLOOR      0.15f                    // never fully dark -- keep a gentle glow
 
 bool alarmEnabled = false;
 int alarmHour = 7;
 int alarmMinute = 0;
+int throbPeriodMs = THROB_PERIOD_DEFAULT;  // breathing period, set via web app
 
 // runtime (not persisted)
 bool alarmActive = false;              // currently inside the throb window
@@ -126,6 +129,8 @@ bool fetchWeather();
 uint32_t weatherCodeToColor(int code);
 void handleGetAlarm();
 void handleSetAlarm();
+void handleSetThrob();
+void handleFlashInfo();
 
 // ---- Update ticker to match current speed ----
 void updateTickerSpeed() {
@@ -203,6 +208,8 @@ void setup() {
   server.on("/setschedule", handleSetSchedule);
   server.on("/alarm", handleGetAlarm);
   server.on("/setalarm", handleSetAlarm);
+  server.on("/setthrob", handleSetThrob);
+  server.on("/flashinfo", handleFlashInfo);
   server.begin();
 
   // Start animation timer at default speed
@@ -370,6 +377,8 @@ void loadSchedule() {
   if (idx >= 0) alarmHour = constrain(data.substring(idx + 5).toInt(), 0, 23);
   idx = data.indexOf("\"am\":");
   if (idx >= 0) alarmMinute = constrain(data.substring(idx + 5).toInt(), 0, 59);
+  idx = data.indexOf("\"tp\":");
+  if (idx >= 0) throbPeriodMs = constrain(data.substring(idx + 5).toInt(), THROB_PERIOD_MIN, THROB_PERIOD_MAX);
 
   if (DEBUG_ENABLED) {
     Serial.printf("Schedule loaded: %s %02d:%02d - %02d:%02d | Alarm: %s %02d:%02d\n",
@@ -384,9 +393,9 @@ void saveSchedule() {
     if (DEBUG_ENABLED) Serial.println("Failed to save schedule");
     return;
   }
-  f.printf("{\"en\":%d,\"sh\":%d,\"sm\":%d,\"eh\":%d,\"em\":%d,\"aen\":%d,\"ah\":%d,\"am\":%d}",
+  f.printf("{\"en\":%d,\"sh\":%d,\"sm\":%d,\"eh\":%d,\"em\":%d,\"aen\":%d,\"ah\":%d,\"am\":%d,\"tp\":%d}",
     scheduleEnabled ? 1 : 0, startHour, startMinute, stopHour, stopMinute,
-    alarmEnabled ? 1 : 0, alarmHour, alarmMinute);
+    alarmEnabled ? 1 : 0, alarmHour, alarmMinute, throbPeriodMs);
   f.close();
   if (DEBUG_ENABLED) Serial.println("Schedule saved");
 }
@@ -534,7 +543,8 @@ void endAlarmThrob() {
 // never goes fully dark. Scales the COLOR (not strip.setBrightness) to
 // keep hue resolution.
 void renderAlarmThrob() {
-  float phase = (float)(millis() % (unsigned long)THROB_PERIOD_MS) / THROB_PERIOD_MS;
+  float period = (float)throbPeriodMs;
+  float phase = (float)(millis() % (unsigned long)period) / period;
   float s = (sinf(phase * 2.0f * PI - PI / 2.0f) + 1.0f) * 0.5f;  // 0..1, starts low
   float scale = THROB_FLOOR + (1.0f - THROB_FLOOR) * s;
   uint32_t c = weatherValid ? weatherColor : strip.Color(120, 120, 120);  // neutral fallback
@@ -587,6 +597,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   #hueSlider { background: #333; }
   #speedSlider { background: linear-gradient(to right, #e94560, #16213e);
          accent-color: #e94560; }
+  #throbSlider { background: linear-gradient(to right, #feca57, #0f3460);
+         accent-color: #feca57; }
   #brightSlider { background: linear-gradient(to right, #222, #fff);
          accent-color: #e94560; }
   .swatch { width: 48px; height: 48px; border-radius: 50%; border: 3px solid #fff;
@@ -664,6 +676,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <div class='sched-row'>
     <label>Alarm time</label>
     <input type='time' id='alarmTime' value='07:00' onchange='sendAlarm()'>
+  </div>
+  <div class='slider-wrap'>
+    <label>Throb speed: <span id='tv'>3.0</span>s / breath</label>
+    <input type='range' min='1000' max='8000' step='250' value='3000' id='throbSlider'
+      oninput="document.getElementById('tv').textContent=(this.value/1000).toFixed(1)"
+      onchange="fetch('/setthrob?ms='+this.value)">
   </div>
   <div id='alarmHint' style='font-size:12px;color:#888;margin-top:8px'>
     Gentle throb at alarm time in today's weather color:
@@ -788,6 +806,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       // Weather alarm
       document.getElementById('alarmEn').checked=d.alarmEn;
       document.getElementById('alarmTime').value=pad2(d.ah)+':'+pad2(d.am);
+      document.getElementById('throbSlider').value=d.throbMs;
+      document.getElementById('tv').textContent=(d.throbMs/1000).toFixed(1);
       if(d.time) document.getElementById('devTime').textContent='Device time: '+d.time;
       updateUI();
     });
@@ -889,6 +909,8 @@ void handleStatus() {
   json += alarmMinute;
   json += ",\"alarmActive\":";
   json += alarmActive ? "true" : "false";
+  json += ",\"throbMs\":";
+  json += throbPeriodMs;
   // Current device time
   time_t now = time(nullptr);
   if (now > 100000) {
@@ -955,6 +977,39 @@ void handleGetAlarm() {
   server.send(200, "application/json", json);
 }
 
+// Flash-layout canary: exposes the ACTUAL chip flash size vs the size this
+// image was BUILT for. When they differ, the build FQBN/flash layout does not
+// match the hardware -- the exact condition that bricks an OTA (RF-cal / FS
+// land in the wrong sectors). flash.sh preflights this before any OTA and
+// aborts on match=false. (The 2026-07-10 brick was actually a WiFi SSID case
+// error, not layout; this canary covers the layout failure mode. See BUILD_LOG.)
+void handleFlashInfo() {
+  uint32_t real = ESP.getFlashChipRealSize();  // queried from the chip
+  uint32_t conf = ESP.getFlashChipSize();      // what the image was built to assume
+  String json = "{\"realSize\":";
+  json += real;
+  json += ",\"configuredSize\":";
+  json += conf;
+  json += ",\"match\":";
+  json += (real == conf) ? "true" : "false";
+  json += ",\"freeSketchSpace\":";
+  json += ESP.getFreeSketchSpace();
+  json += ",\"sketchSize\":";
+  json += ESP.getSketchSize();
+  json += ",\"flashMode\":";
+  json += (int)ESP.getFlashChipMode();
+  json += ",\"freeHeap\":";
+  json += ESP.getFreeHeap();
+  json += ",\"maxFreeBlock\":";
+  json += ESP.getMaxFreeBlockSize();
+  json += ",\"coreVersion\":\"";
+  json += ESP.getCoreVersion();
+  json += "\",\"sdkVersion\":\"";
+  json += ESP.getSdkVersion();
+  json += "\"}";
+  server.send(200, "application/json", json);
+}
+
 void handleSetAlarm() {
   if (server.hasArg("aen"))
     alarmEnabled = server.arg("aen").toInt() == 1;
@@ -972,6 +1027,15 @@ void handleSetAlarm() {
   if (DEBUG_ENABLED) {
     Serial.printf("Alarm set: %s %02d:%02d\n",
       alarmEnabled ? "ON" : "OFF", alarmHour, alarmMinute);
+  }
+  server.send(200, "text/plain", "OK");
+}
+
+void handleSetThrob() {
+  if (server.hasArg("ms")) {
+    throbPeriodMs = constrain(server.arg("ms").toInt(), THROB_PERIOD_MIN, THROB_PERIOD_MAX);
+    saveSchedule();  // persisted in the same file
+    if (DEBUG_ENABLED) Serial.printf("Throb period set: %d ms\n", throbPeriodMs);
   }
   server.send(200, "text/plain", "OK");
 }
