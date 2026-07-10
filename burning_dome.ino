@@ -11,6 +11,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
+#include <ESP8266HTTPClient.h>
 #include <ESP8266mDNS.h>
 #include <ArduinoOTA.h>
 #include <Ticker.h>
@@ -75,6 +76,30 @@ int stopMinute = 0;
 bool scheduledOff = false;    // true when schedule has turned orb off
 unsigned long lastScheduleCheck = 0;
 
+// ---- Weather-Alarm State (WATG-1/2/3) ----
+// At a set alarm time the orb does a gentle 30-min throb whose COLOR
+// encodes today's weather (yellow=sunny, blue=cloudy, grey=rain/fog),
+// fetched keyless over plain HTTP from Open-Meteo.
+#define ALARM_THROB_MS   (30UL * 60UL * 1000UL)  // 30-minute throb window
+#define WEATHER_PREFETCH_MIN  30                 // fetch this many min before alarm
+#define THROB_TICK_MS    40                      // fast ticker while throbbing (smooth sine)
+#define THROB_PERIOD_MS  3000.0f                 // one throb cycle
+#define THROB_FLOOR      0.15f                    // never fully dark -- keep a gentle glow
+
+bool alarmEnabled = false;
+int alarmHour = 7;
+int alarmMinute = 0;
+
+// runtime (not persisted)
+bool alarmActive = false;              // currently inside the throb window
+unsigned long alarmStartMs = 0;        // millis() when the throb window began
+bool savedOrbOn = true;                // orbOn to restore when the throb ends
+int lastAlarmFireYday = -1;            // tm_yday of last fire -> fire once/day
+int lastWeatherFetchYday = -1;         // tm_yday of last prefetch -> fetch once/day
+
+uint32_t weatherColor = 0;             // resolved throb color from last fetch
+bool weatherValid = false;             // true once a fetch has succeeded
+
 // ---- Forward Declarations ----
 void startShow(int mode);
 void resetAnimationState();
@@ -93,6 +118,14 @@ void updateTickerSpeed();
 void loadSchedule();
 void saveSchedule();
 void checkSchedule();
+void checkAlarm();
+void startAlarmThrob();
+void endAlarmThrob();
+void renderAlarmThrob();
+bool fetchWeather();
+uint32_t weatherCodeToColor(int code);
+void handleGetAlarm();
+void handleSetAlarm();
 
 // ---- Update ticker to match current speed ----
 void updateTickerSpeed() {
@@ -168,6 +201,8 @@ void setup() {
   server.on("/status", handleStatus);
   server.on("/schedule", handleGetSchedule);
   server.on("/setschedule", handleSetSchedule);
+  server.on("/alarm", handleGetAlarm);
+  server.on("/setalarm", handleSetAlarm);
   server.begin();
 
   // Start animation timer at default speed
@@ -182,16 +217,24 @@ void loop() {
   server.handleClient();
   yield();
 
-  // === Schedule check -- once per second ===
-  if (scheduleEnabled && millis() - lastScheduleCheck >= 1000) {
+  // === Schedule + alarm check -- once per second ===
+  if (millis() - lastScheduleCheck >= 1000) {
     lastScheduleCheck = millis();
-    checkSchedule();
+    // Expire the throb window first so the restored state is authoritative
+    if (alarmActive && millis() - alarmStartMs >= ALARM_THROB_MS) {
+      endAlarmThrob();
+    }
+    // Schedule yields to an active alarm throb (the alarm overrides on/off)
+    if (scheduleEnabled && !alarmActive) checkSchedule();
+    if (alarmEnabled) checkAlarm();
   }
 
   // === LED update -- only when timer flag is set ===
   if (animFlag) {
     animFlag = false;
-    if (orbOn) {
+    if (alarmActive) {
+      renderAlarmThrob();     // throb overrides the normal animation
+    } else if (orbOn) {
       startShow(showType);
     }
     yield();
@@ -320,10 +363,18 @@ void loadSchedule() {
   if (idx >= 0) stopHour = constrain(data.substring(idx + 5).toInt(), 0, 23);
   idx = data.indexOf("\"em\":");
   if (idx >= 0) stopMinute = constrain(data.substring(idx + 5).toInt(), 0, 59);
+  // Weather-alarm fields (absent in pre-alarm files -> keep defaults)
+  idx = data.indexOf("\"aen\":");
+  if (idx >= 0) alarmEnabled = data.substring(idx + 6).toInt() == 1;
+  idx = data.indexOf("\"ah\":");
+  if (idx >= 0) alarmHour = constrain(data.substring(idx + 5).toInt(), 0, 23);
+  idx = data.indexOf("\"am\":");
+  if (idx >= 0) alarmMinute = constrain(data.substring(idx + 5).toInt(), 0, 59);
 
   if (DEBUG_ENABLED) {
-    Serial.printf("Schedule loaded: %s %02d:%02d - %02d:%02d\n",
-      scheduleEnabled ? "ON" : "OFF", startHour, startMinute, stopHour, stopMinute);
+    Serial.printf("Schedule loaded: %s %02d:%02d - %02d:%02d | Alarm: %s %02d:%02d\n",
+      scheduleEnabled ? "ON" : "OFF", startHour, startMinute, stopHour, stopMinute,
+      alarmEnabled ? "ON" : "OFF", alarmHour, alarmMinute);
   }
 }
 
@@ -333,8 +384,9 @@ void saveSchedule() {
     if (DEBUG_ENABLED) Serial.println("Failed to save schedule");
     return;
   }
-  f.printf("{\"en\":%d,\"sh\":%d,\"sm\":%d,\"eh\":%d,\"em\":%d}",
-    scheduleEnabled ? 1 : 0, startHour, startMinute, stopHour, stopMinute);
+  f.printf("{\"en\":%d,\"sh\":%d,\"sm\":%d,\"eh\":%d,\"em\":%d,\"aen\":%d,\"ah\":%d,\"am\":%d}",
+    scheduleEnabled ? 1 : 0, startHour, startMinute, stopHour, stopMinute,
+    alarmEnabled ? 1 : 0, alarmHour, alarmMinute);
   f.close();
   if (DEBUG_ENABLED) Serial.println("Schedule saved");
 }
@@ -373,6 +425,125 @@ void checkSchedule() {
     allColor(0);
     if (DEBUG_ENABLED) Serial.println("Schedule: turning OFF");
   }
+}
+
+// ==========================================================
+// Weather Alarm (WATG-1/2/3)
+// ==========================================================
+
+// WMO weathercode -> throb color. Mapping resolved in TODOS WATG-D2.
+// RGB values are first-pass; calibrate on the actual fiber bundle.
+uint32_t weatherCodeToColor(int code) {
+  if (code <= 1)  return strip.Color(255, 190, 0);  // 0-1 clear     -> yellow (sunny)
+  if (code <= 3)  return strip.Color(0, 70, 255);   // 2-3 cloudy    -> blue
+  return strip.Color(90, 90, 90);                    // fog/rain/etc  -> grey
+}
+
+// Fetch current conditions from Open-Meteo over PLAIN HTTP (keyless, no
+// TLS -- see PLATFORM_PHYSICS). Blocking, but called at most once/day
+// from the 1 Hz tick, never from the render path. Returns true on success.
+bool fetchWeather() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  WiFiClient client;
+  HTTPClient http;
+  String url = String("http://api.open-meteo.com/v1/forecast?latitude=")
+             + WEATHER_LAT + "&longitude=" + WEATHER_LON + "&current_weather=true";
+  if (!http.begin(client, url)) return false;
+  http.setTimeout(8000);
+  int status = http.GET();
+  if (status != HTTP_CODE_OK) {
+    if (DEBUG_ENABLED) Serial.printf("Weather fetch HTTP %d\n", status);
+    http.end();
+    return false;
+  }
+  String payload = http.getString();
+  http.end();
+
+  // The JSON carries "weathercode" TWICE: first as a units string inside
+  // "current_weather_units", then as the real value inside
+  // "current_weather". Anchor on the current_weather object so we read the
+  // number, not the "wmo code" units string.
+  int cw = payload.indexOf("\"current_weather\":");
+  if (cw < 0) return false;
+  int idx = payload.indexOf("\"weathercode\":", cw);
+  if (idx < 0) return false;
+  int wcode = payload.substring(idx + 14).toInt();
+
+  weatherColor = weatherCodeToColor(wcode);
+  weatherValid = true;
+  if (DEBUG_ENABLED) Serial.printf("Weather: code=%d -> color set\n", wcode);
+  return true;
+}
+
+// 1 Hz: prefetch weather ~30 min before the alarm, then fire the throb at
+// the alarm minute. Both are once-per-day and guarded on NTP sync.
+void checkAlarm() {
+  time_t now = time(nullptr);
+  if (now < 100000) return;  // NTP not synced yet -- never fire on a ~1970 clock
+
+  struct tm* t = localtime(&now);
+  int nowMinutes = t->tm_hour * 60 + t->tm_min;
+  int alarmMinutes = alarmHour * 60 + alarmMinute;
+  int prefetchMinutes = (alarmMinutes - WEATHER_PREFETCH_MIN + 1440) % 1440;
+
+  // Prefetch window (once/day)
+  if (t->tm_yday != lastWeatherFetchYday && nowMinutes == prefetchMinutes) {
+    lastWeatherFetchYday = t->tm_yday;
+    fetchWeather();
+  }
+
+  // Alarm fire (once/day)
+  if (!alarmActive && t->tm_yday != lastAlarmFireYday && nowMinutes == alarmMinutes) {
+    lastAlarmFireYday = t->tm_yday;
+    startAlarmThrob();
+  }
+}
+
+void startAlarmThrob() {
+  // If the prefetch was missed (e.g. booted after it), grab weather now.
+  time_t now = time(nullptr);
+  struct tm* t = localtime(&now);
+  if (t->tm_yday != lastWeatherFetchYday) {
+    lastWeatherFetchYday = t->tm_yday;
+    fetchWeather();
+  }
+  savedOrbOn = orbOn;           // remember state to restore after the window
+  alarmActive = true;
+  alarmStartMs = millis();
+  orbOn = true;                 // ensure LEDs run during the throb
+  strip.setBrightness(255);     // throb dims via color scaling, not global brightness
+  animTicker.attach_ms(THROB_TICK_MS, onAnimTimer);  // fast, smooth sine
+  if (DEBUG_ENABLED) Serial.println("Alarm: throb START");
+}
+
+void endAlarmThrob() {
+  alarmActive = false;
+  updateTickerSpeed();                 // restore the user's animation speed
+  strip.setBrightness(brightnessVal);  // restore brightness
+  orbOn = savedOrbOn;
+  if (orbOn) {
+    resetAnimationState();             // resume the normal animation
+  } else {
+    allColor(0);                       // was off -> push an explicit dark frame (55797f7)
+  }
+  if (DEBUG_ENABLED) Serial.println("Alarm: throb END");
+}
+
+// One throb frame: a slow sine on brightness at the weather color,
+// millis()-phased so it is smooth regardless of tick rate, floored so it
+// never goes fully dark. Scales the COLOR (not strip.setBrightness) to
+// keep hue resolution.
+void renderAlarmThrob() {
+  float phase = (float)(millis() % (unsigned long)THROB_PERIOD_MS) / THROB_PERIOD_MS;
+  float s = (sinf(phase * 2.0f * PI - PI / 2.0f) + 1.0f) * 0.5f;  // 0..1, starts low
+  float scale = THROB_FLOOR + (1.0f - THROB_FLOOR) * s;
+  uint32_t c = weatherValid ? weatherColor : strip.Color(120, 120, 120);  // neutral fallback
+  uint8_t r = (uint8_t)(((c >> 16) & 0xFF) * scale);
+  uint8_t g = (uint8_t)(((c >> 8) & 0xFF) * scale);
+  uint8_t b = (uint8_t)((c & 0xFF) * scale);
+  uint32_t scaled = strip.Color(r, g, b);
+  for (uint16_t i = 0; i < strip.numPixels(); i++) strip.setPixelColor(i, scaled);
+  strip.show();
 }
 
 // ==========================================================
@@ -485,6 +656,23 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <div id='devTime'></div>
 </div>
 
+<div class='card' id='alarmCard'>
+  <div class='sched-row'>
+    <label>Weather Alarm</label>
+    <label class='toggle'><input type='checkbox' id='alarmEn' onchange='sendAlarm()'><span class='slider'></span></label>
+  </div>
+  <div class='sched-row'>
+    <label>Alarm time</label>
+    <input type='time' id='alarmTime' value='07:00' onchange='sendAlarm()'>
+  </div>
+  <div id='alarmHint' style='font-size:12px;color:#888;margin-top:8px'>
+    Gentle throb at alarm time in today's weather color:
+    <span style='color:#ffbe00'>&#9679; sunny</span>
+    <span style='color:#3a7bff'>&#9679; cloudy</span>
+    <span style='color:#9a9a9a'>&#9679; rain/fog</span>
+  </div>
+</div>
+
 <div id='status'>IO-Orb</div>
 
 <script>
@@ -567,6 +755,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     fetch('/setschedule?en='+en+'&sh='+st[0]+'&sm='+st[1]+'&eh='+et[0]+'&em='+et[1]);
   }
 
+  function sendAlarm(){
+    var en=document.getElementById('alarmEn').checked?1:0;
+    var at=document.getElementById('alarmTime').value.split(':');
+    fetch('/setalarm?aen='+en+'&ah='+at[0]+'&am='+at[1]);
+  }
+
   // Pad number to 2 digits
   function pad2(n){ return n<10?'0'+n:''+n; }
 
@@ -591,6 +785,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       document.getElementById('schedEn').checked=d.schedEn;
       document.getElementById('schedStart').value=pad2(d.sh)+':'+pad2(d.sm);
       document.getElementById('schedStop').value=pad2(d.eh)+':'+pad2(d.em);
+      // Weather alarm
+      document.getElementById('alarmEn').checked=d.alarmEn;
+      document.getElementById('alarmTime').value=pad2(d.ah)+':'+pad2(d.am);
       if(d.time) document.getElementById('devTime').textContent='Device time: '+d.time;
       updateUI();
     });
@@ -683,6 +880,15 @@ void handleStatus() {
   json += stopHour;
   json += ",\"em\":";
   json += stopMinute;
+  // Weather alarm
+  json += ",\"alarmEn\":";
+  json += alarmEnabled ? "true" : "false";
+  json += ",\"ah\":";
+  json += alarmHour;
+  json += ",\"am\":";
+  json += alarmMinute;
+  json += ",\"alarmActive\":";
+  json += alarmActive ? "true" : "false";
   // Current device time
   time_t now = time(nullptr);
   if (now > 100000) {
@@ -732,6 +938,40 @@ void handleSetSchedule() {
   if (DEBUG_ENABLED) {
     Serial.printf("Schedule set: %s %02d:%02d - %02d:%02d\n",
       scheduleEnabled ? "ON" : "OFF", startHour, startMinute, stopHour, stopMinute);
+  }
+  server.send(200, "text/plain", "OK");
+}
+
+void handleGetAlarm() {
+  String json = "{\"enabled\":";
+  json += alarmEnabled ? "true" : "false";
+  json += ",\"hour\":";
+  json += alarmHour;
+  json += ",\"minute\":";
+  json += alarmMinute;
+  json += ",\"active\":";
+  json += alarmActive ? "true" : "false";
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+void handleSetAlarm() {
+  if (server.hasArg("aen"))
+    alarmEnabled = server.arg("aen").toInt() == 1;
+  if (server.hasArg("ah"))
+    alarmHour = constrain(server.arg("ah").toInt(), 0, 23);
+  if (server.hasArg("am"))
+    alarmMinute = constrain(server.arg("am").toInt(), 0, 59);
+
+  // Allow re-fire today if the alarm was edited to a still-future time
+  lastAlarmFireYday = -1;
+  lastWeatherFetchYday = -1;
+
+  saveSchedule();  // alarm lives in the same file as the schedule
+
+  if (DEBUG_ENABLED) {
+    Serial.printf("Alarm set: %s %02d:%02d\n",
+      alarmEnabled ? "ON" : "OFF", alarmHour, alarmMinute);
   }
   server.send(200, "text/plain", "OK");
 }

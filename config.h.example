@@ -1,3 +1,8 @@
 // WiFi credentials -- copy to config.h and fill in your values
 #define WIFI_SSID "your-ssid"
 #define WIFI_PASS "your-password"
+
+// Weather-alarm location (Open-Meteo, keyless plain-HTTP -- no API key).
+// Decimal degrees; e.g. Seattle = 47.6062 / -122.3321.
+#define WEATHER_LAT "47.6062"
+#define WEATHER_LON "-122.3321"
