@@ -82,21 +82,25 @@ bool scheduledOff = false;    // true when schedule has turned orb off
 unsigned long lastScheduleCheck = 0;
 
 // ---- Weather-Alarm State (WATG-1/2/3) ----
-// At a set alarm time the orb does a gentle 30-min throb whose COLOR
-// encodes today's weather (yellow=sunny, blue=cloudy, grey=rain/fog),
-// fetched keyless over plain HTTP from Open-Meteo.
-#define ALARM_THROB_MS   (30UL * 60UL * 1000UL)  // 30-minute throb window
+// At a set alarm time the orb does a gentle throb whose COLOR encodes today's
+// weather (yellow=sunny, blue=cloudy, grey=rain/fog), fetched keyless over plain
+// HTTP from Open-Meteo. Alarm length + throb up/down times are runtime-set.
 #define WEATHER_PREFETCH_MIN  30                 // fetch this many min before alarm
-#define THROB_TICK_MS    40                      // fast ticker while throbbing (smooth sine)
-#define THROB_PERIOD_DEFAULT 3000                // ms per throb cycle (runtime-adjustable via /setthrob)
-#define THROB_PERIOD_MIN 1000                    // 1 s = brisk
-#define THROB_PERIOD_MAX 8000                    // 8 s = very slow/gentle
+#define THROB_TICK_MS    40                      // fast ticker while throbbing (smooth curve)
+#define ALARM_LEN_DEFAULT 30                     // throb window, minutes (via /setalarm al=)
+#define ALARM_LEN_MIN     1
+#define ALARM_LEN_MAX     120
+#define THROB_MS_DEFAULT  1500                    // per-phase (up OR down) default, ms
+#define THROB_MS_MIN      300
+#define THROB_MS_MAX      6000
 #define THROB_FLOOR      0.15f                    // never fully dark -- keep a gentle glow
 
 bool alarmEnabled = false;
 int alarmHour = 7;
 int alarmMinute = 0;
-int throbPeriodMs = THROB_PERIOD_DEFAULT;  // breathing period, set via web app
+int alarmLenMin = ALARM_LEN_DEFAULT;   // throb window length, minutes (web-set)
+int throbUpMs = THROB_MS_DEFAULT;      // brightness rise time, ms (web-set)
+int throbDownMs = THROB_MS_DEFAULT;    // brightness fall time, ms (web-set)
 
 // runtime (not persisted)
 bool alarmActive = false;              // currently inside the throb window
@@ -261,7 +265,7 @@ void loop() {
   if (millis() - lastScheduleCheck >= 1000) {
     lastScheduleCheck = millis();
     // Expire the throb window first so the restored state is authoritative
-    if (alarmActive && millis() - alarmStartMs >= ALARM_THROB_MS) {
+    if (alarmActive && millis() - alarmStartMs >= (unsigned long)alarmLenMin * 60000UL) {
       endAlarmThrob();
     }
     // Schedule yields to an active alarm throb (the alarm overrides on/off)
@@ -456,8 +460,15 @@ void loadSchedule() {
   if (idx >= 0) alarmHour = constrain(data.substring(idx + 5).toInt(), 0, 23);
   idx = data.indexOf("\"am\":");
   if (idx >= 0) alarmMinute = constrain(data.substring(idx + 5).toInt(), 0, 59);
-  idx = data.indexOf("\"tp\":");
-  if (idx >= 0) throbPeriodMs = constrain(data.substring(idx + 5).toInt(), THROB_PERIOD_MIN, THROB_PERIOD_MAX);
+  idx = data.indexOf("\"al\":");
+  if (idx >= 0) alarmLenMin = constrain(data.substring(idx + 5).toInt(), ALARM_LEN_MIN, ALARM_LEN_MAX);
+  idx = data.indexOf("\"tp\":");   // legacy single period -> split evenly into up + down
+  if (idx >= 0) { int tp = data.substring(idx + 5).toInt() / 2;
+                  throbUpMs = throbDownMs = constrain(tp, THROB_MS_MIN, THROB_MS_MAX); }
+  idx = data.indexOf("\"tu\":");
+  if (idx >= 0) throbUpMs = constrain(data.substring(idx + 5).toInt(), THROB_MS_MIN, THROB_MS_MAX);
+  idx = data.indexOf("\"td\":");
+  if (idx >= 0) throbDownMs = constrain(data.substring(idx + 5).toInt(), THROB_MS_MIN, THROB_MS_MAX);
 
   if (DEBUG_ENABLED) {
     Serial.printf("Schedule loaded: %s %02d:%02d - %02d:%02d | Alarm: %s %02d:%02d\n",
@@ -472,9 +483,9 @@ void saveSchedule() {
     if (DEBUG_ENABLED) Serial.println("Failed to save schedule");
     return;
   }
-  f.printf("{\"en\":%d,\"sh\":%d,\"sm\":%d,\"eh\":%d,\"em\":%d,\"aen\":%d,\"ah\":%d,\"am\":%d,\"tp\":%d}",
+  f.printf("{\"en\":%d,\"sh\":%d,\"sm\":%d,\"eh\":%d,\"em\":%d,\"aen\":%d,\"ah\":%d,\"am\":%d,\"al\":%d,\"tu\":%d,\"td\":%d}",
     scheduleEnabled ? 1 : 0, startHour, startMinute, stopHour, stopMinute,
-    alarmEnabled ? 1 : 0, alarmHour, alarmMinute, throbPeriodMs);
+    alarmEnabled ? 1 : 0, alarmHour, alarmMinute, alarmLenMin, throbUpMs, throbDownMs);
   f.close();
   if (DEBUG_ENABLED) Serial.println("Schedule saved");
 }
@@ -617,14 +628,21 @@ void endAlarmThrob() {
   if (DEBUG_ENABLED) Serial.println("Alarm: throb END");
 }
 
-// One throb frame: a slow sine on brightness at the weather color,
-// millis()-phased so it is smooth regardless of tick rate, floored so it
-// never goes fully dark. Scales the COLOR (not strip.setBrightness) to
-// keep hue resolution.
+// One throb frame: brightness eases UP over throbUpMs then DOWN over throbDownMs
+// (asymmetric breathing), millis()-phased so it is smooth regardless of tick
+// rate, floored so it never goes fully dark. Scales the COLOR (not
+// strip.setBrightness) to keep hue resolution.
 void renderAlarmThrob() {
-  float period = (float)throbPeriodMs;
-  float phase = (float)(millis() % (unsigned long)period) / period;
-  float s = (sinf(phase * 2.0f * PI - PI / 2.0f) + 1.0f) * 0.5f;  // 0..1, starts low
+  unsigned long cycle = (unsigned long)throbUpMs + (unsigned long)throbDownMs;
+  unsigned long t = millis() % cycle;
+  float s;                                              // 0..1 brightness shape
+  if (t < (unsigned long)throbUpMs) {                   // rising phase
+    float p = (float)t / (float)throbUpMs;
+    s = (1.0f - cosf(p * PI)) * 0.5f;                   // ease floor -> peak
+  } else {                                              // falling phase
+    float p = (float)(t - throbUpMs) / (float)throbDownMs;
+    s = (1.0f + cosf(p * PI)) * 0.5f;                   // ease peak -> floor
+  }
   float scale = THROB_FLOOR + (1.0f - THROB_FLOOR) * s;
   uint32_t c = weatherValid ? weatherColor : strip.Color(120, 120, 120);  // neutral fallback
   uint8_t r = (uint8_t)(((c >> 16) & 0xFF) * scale);
@@ -679,8 +697,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   #hueSlider { background: #333; }
   #speedSlider { background: linear-gradient(to right, #e94560, #16213e);
          accent-color: #e94560; }
-  #throbSlider { background: linear-gradient(to right, #feca57, #0f3460);
-         accent-color: #feca57; }
+  #alarmLen { background: linear-gradient(to right, #0f3460, #e94560); accent-color: #e94560; }
+  #throbUp { background: linear-gradient(to right, #0f3460, #feca57); accent-color: #feca57; }
+  #throbDown { background: linear-gradient(to right, #feca57, #0f3460); accent-color: #feca57; }
   #brightSlider { background: linear-gradient(to right, #222, #fff);
          accent-color: #e94560; }
   .swatch { width: 48px; height: 48px; border-radius: 50%; border: 3px solid #fff;
@@ -760,10 +779,22 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <input type='time' id='alarmTime' value='07:00' onchange='sendAlarm()'>
   </div>
   <div class='slider-wrap'>
-    <label>Throb speed: <span id='tv'>3.0</span>s / breath</label>
-    <input type='range' min='1000' max='8000' step='250' value='3000' id='throbSlider'
-      oninput="document.getElementById('tv').textContent=(this.value/1000).toFixed(1)"
-      onchange="fetch('/setthrob?ms='+this.value)">
+    <label>Alarm length: <span id='alv'>30</span> min</label>
+    <input type='range' min='1' max='120' step='1' value='30' id='alarmLen'
+      oninput="document.getElementById('alv').textContent=this.value"
+      onchange='sendAlarm()'>
+  </div>
+  <div class='slider-wrap'>
+    <label>Throb up: <span id='tuv'>1.5</span>s</label>
+    <input type='range' min='300' max='6000' step='100' value='1500' id='throbUp'
+      oninput="document.getElementById('tuv').textContent=(this.value/1000).toFixed(1)"
+      onchange='sendThrob()'>
+  </div>
+  <div class='slider-wrap'>
+    <label>Throb down: <span id='tdv'>1.5</span>s</label>
+    <input type='range' min='300' max='6000' step='100' value='1500' id='throbDown'
+      oninput="document.getElementById('tdv').textContent=(this.value/1000).toFixed(1)"
+      onchange='sendThrob()'>
   </div>
   <div id='alarmHint' style='font-size:12px;color:#888;margin-top:8px'>
     Gentle throb at alarm time in today's weather color:
@@ -850,7 +881,14 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   function sendAlarm(){
     var en=document.getElementById('alarmEn').checked?1:0;
     var at=document.getElementById('alarmTime').value.split(':');
-    fetch('/setalarm?aen='+en+'&ah='+at[0]+'&am='+at[1]);
+    var al=document.getElementById('alarmLen').value;
+    fetch('/setalarm?aen='+en+'&ah='+at[0]+'&am='+at[1]+'&al='+al);
+  }
+
+  function sendThrob(){
+    var u=document.getElementById('throbUp').value;
+    var d=document.getElementById('throbDown').value;
+    fetch('/setthrob?up='+u+'&down='+d);
   }
 
   // Pad number to 2 digits
@@ -876,8 +914,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       // Weather alarm
       document.getElementById('alarmEn').checked=d.alarmEn;
       document.getElementById('alarmTime').value=pad2(d.ah)+':'+pad2(d.am);
-      document.getElementById('throbSlider').value=d.throbMs;
-      document.getElementById('tv').textContent=(d.throbMs/1000).toFixed(1);
+      document.getElementById('alarmLen').value=d.alarmLen;
+      document.getElementById('alv').textContent=d.alarmLen;
+      document.getElementById('throbUp').value=d.throbUp;
+      document.getElementById('tuv').textContent=(d.throbUp/1000).toFixed(1);
+      document.getElementById('throbDown').value=d.throbDown;
+      document.getElementById('tdv').textContent=(d.throbDown/1000).toFixed(1);
       if(d.time) document.getElementById('devTime').textContent='Device time: '+d.time;
       updateUI();
     });
@@ -979,8 +1021,12 @@ void handleStatus() {
   json += alarmMinute;
   json += ",\"alarmActive\":";
   json += alarmActive ? "true" : "false";
-  json += ",\"throbMs\":";
-  json += throbPeriodMs;
+  json += ",\"alarmLen\":";
+  json += alarmLenMin;
+  json += ",\"throbUp\":";
+  json += throbUpMs;
+  json += ",\"throbDown\":";
+  json += throbDownMs;
   // NG-1 glitch guard telemetry
   json += ",\"glitchEvents\":";
   json += glitchEvents;
@@ -1096,6 +1142,13 @@ void handleSetAlarm() {
     alarmHour = constrain(server.arg("ah").toInt(), 0, 23);
   if (server.hasArg("am"))
     alarmMinute = constrain(server.arg("am").toInt(), 0, 59);
+  if (server.hasArg("al"))
+    alarmLenMin = constrain(server.arg("al").toInt(), ALARM_LEN_MIN, ALARM_LEN_MAX);
+
+  // Turning the alarm OFF while it is throbbing dismisses it early and reverts
+  // to the SCHEDULED state (dark in a scheduled-off window, else the running
+  // animation) - same restore as the natural window end (feature 3).
+  if (!alarmEnabled && alarmActive) endAlarmThrob();
 
   // Allow re-fire today if the alarm was edited to a still-future time
   lastAlarmFireYday = -1;
@@ -1104,17 +1157,19 @@ void handleSetAlarm() {
   saveSchedule();  // alarm lives in the same file as the schedule
 
   if (DEBUG_ENABLED) {
-    Serial.printf("Alarm set: %s %02d:%02d\n",
-      alarmEnabled ? "ON" : "OFF", alarmHour, alarmMinute);
+    Serial.printf("Alarm set: %s %02d:%02d len=%dmin\n",
+      alarmEnabled ? "ON" : "OFF", alarmHour, alarmMinute, alarmLenMin);
   }
   server.send(200, "text/plain", "OK");
 }
 
 void handleSetThrob() {
-  if (server.hasArg("ms")) {
-    throbPeriodMs = constrain(server.arg("ms").toInt(), THROB_PERIOD_MIN, THROB_PERIOD_MAX);
+  bool changed = false;
+  if (server.hasArg("up"))   { throbUpMs   = constrain(server.arg("up").toInt(),   THROB_MS_MIN, THROB_MS_MAX); changed = true; }
+  if (server.hasArg("down")) { throbDownMs = constrain(server.arg("down").toInt(), THROB_MS_MIN, THROB_MS_MAX); changed = true; }
+  if (changed) {
     saveSchedule();  // persisted in the same file
-    if (DEBUG_ENABLED) Serial.printf("Throb period set: %d ms\n", throbPeriodMs);
+    if (DEBUG_ENABLED) Serial.printf("Throb set: up=%dms down=%dms\n", throbUpMs, throbDownMs);
   }
   server.send(200, "text/plain", "OK");
 }
