@@ -1,3 +1,9 @@
 - 2026-07-10 16:12 | ota -> 192.168.5.185 | 5879a8c-dirty | fqbn=esp8266:esp8266:nodemcuv2 | 404352 bytes
 - 2026-07-10 16:32 | ota -> 192.168.5.185 | 5879a8c-dirty | fqbn=esp8266:esp8266:nodemcuv2 | 405408 bytes
 - 2026-07-10 19:43 | ota -> 192.168.5.185 | 0d398b7 | fqbn=esp8266:esp8266:nodemcuv2 | 405824 bytes
+- 2026-07-10 22:34 | ota -> 192.168.5.185 | 6aef519 | fqbn=esp8266:esp8266:nodemcuv2 | 407904 bytes
+- 2026-07-10 23:08 | ota -> 192.168.5.185 | 430af7b-dirty | fqbn=esp8266:esp8266:nodemcuv2 | 409616 bytes
+- 2026-07-10 23:19 | ota -> 192.168.5.185 | c665384-dirty | fqbn=esp8266:esp8266:nodemcuv2 | 409616 bytes
+- 2026-07-10 23:28 | ota -> 192.168.5.185 | 1215e9b-dirty | fqbn=esp8266:esp8266:nodemcuv2 | 409696 bytes
+- 2026-07-10 23:35 | ota -> 192.168.5.185 | 1215e9b-dirty | fqbn=esp8266:esp8266:nodemcuv2 | 409696 bytes
+- 2026-07-11 08:15 | ota -> 192.168.5.185 | 95c9e45-dirty | fqbn=esp8266:esp8266:nodemcuv2 | 409712 bytes
