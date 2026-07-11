@@ -61,7 +61,7 @@ Merged and awaiting your Done move - the agent never writes Done (done-gate.sh).
   glitchEvents/vcc live in /status.) (detail: NG-1)
 - ~~[ ] [WEB] Mode selector -> dropdown (the button row is now a `<select>`).~~ (done 2026-07-10)
   (merged; PR #3; OTA-deployed 2026-07-10.)
-- [ ] [FW] Weather-alarm throb glow (WATG-1/2/3) + runtime throb-speed + flash
+- ~~[ ] [FW] Weather-alarm throb glow (WATG-1/2/3) + runtime throb-speed + flash~~ (done 2026-07-10)
   gate. (merged; PR #1; throb + weather color confirmed on the orb.)
 
 ## Done
