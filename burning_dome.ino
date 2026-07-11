@@ -700,6 +700,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   #alarmLen { background: linear-gradient(to right, #0f3460, #e94560); accent-color: #e94560; }
   #throbUp { background: linear-gradient(to right, #0f3460, #feca57); accent-color: #feca57; }
   #throbDown { background: linear-gradient(to right, #feca57, #0f3460); accent-color: #feca57; }
+  .link { float: right; font-size: 12px; font-weight: 400; color: #9a9a9a; cursor: pointer; }
+  .link input { vertical-align: -2px; margin-right: 3px; accent-color: #feca57; }
+  .hintlbl { font-size: 11px; font-weight: 400; color: #667; }
+  #throbLen { font-size: 12px; color: #9a9a9a; margin: 2px 2px 0; }
   #brightSlider { background: linear-gradient(to right, #222, #fff);
          accent-color: #e94560; }
   .swatch { width: 48px; height: 48px; border-radius: 50%; border: 3px solid #fff;
@@ -779,23 +783,24 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <input type='time' id='alarmTime' value='07:00' onchange='sendAlarm()'>
   </div>
   <div class='slider-wrap'>
-    <label>Alarm length: <span id='alv'>30</span> min</label>
+    <label>Alarm duration: <span id='alv'>30</span> min <span class='hintlbl'>(how long the alarm keeps throbbing)</span></label>
     <input type='range' min='1' max='120' step='1' value='30' id='alarmLen'
       oninput="document.getElementById('alv').textContent=this.value"
       onchange='sendAlarm()'>
   </div>
   <div class='slider-wrap'>
-    <label>Throb up: <span id='tuv'>1.5</span>s</label>
+    <label>Throb up: <span id='tuv'>1.5</span>s
+      <label class='link'><input type='checkbox' id='throbLock' onchange='onLock()'> link up+down</label>
+    </label>
     <input type='range' min='300' max='6000' step='100' value='1500' id='throbUp'
-      oninput="document.getElementById('tuv').textContent=(this.value/1000).toFixed(1)"
-      onchange='sendThrob()'>
+      oninput="onThrob('up')" onchange='sendThrob()'>
   </div>
   <div class='slider-wrap'>
     <label>Throb down: <span id='tdv'>1.5</span>s</label>
     <input type='range' min='300' max='6000' step='100' value='1500' id='throbDown'
-      oninput="document.getElementById('tdv').textContent=(this.value/1000).toFixed(1)"
-      onchange='sendThrob()'>
+      oninput="onThrob('down')" onchange='sendThrob()'>
   </div>
+  <div id='throbLen'>one throb &#8776; 3.0 s</div>
   <div id='alarmHint' style='font-size:12px;color:#888;margin-top:8px'>
     Gentle throb at alarm time in today's weather color:
     <span style='color:#ffbe00'>&#9679; sunny</span>
@@ -891,6 +896,28 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     fetch('/setthrob?up='+u+'&down='+d);
   }
 
+  // live drag: when linked, the other slider mirrors; always refresh the readouts
+  function onThrob(which){
+    var up=document.getElementById('throbUp'), dn=document.getElementById('throbDown');
+    if(document.getElementById('throbLock').checked){
+      if(which=='up') dn.value=up.value; else up.value=dn.value;
+    }
+    document.getElementById('tuv').textContent=(up.value/1000).toFixed(1);
+    document.getElementById('tdv').textContent=(dn.value/1000).toFixed(1);
+    updateThrobLen();
+  }
+  function updateThrobLen(){
+    var t=(+document.getElementById('throbUp').value + +document.getElementById('throbDown').value)/1000;
+    document.getElementById('throbLen').textContent='one throb ≈ '+t.toFixed(1)+' s';
+  }
+  // link toggle: persists per browser; when first linked, snap down to match up
+  function onLock(){
+    var locked=document.getElementById('throbLock').checked;
+    localStorage.setItem('throbLock', locked?'1':'0');
+    if(locked){ document.getElementById('throbDown').value=document.getElementById('throbUp').value;
+                onThrob('up'); sendThrob(); }
+  }
+
   // Pad number to 2 digits
   function pad2(n){ return n<10?'0'+n:''+n; }
 
@@ -920,6 +947,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       document.getElementById('tuv').textContent=(d.throbUp/1000).toFixed(1);
       document.getElementById('throbDown').value=d.throbDown;
       document.getElementById('tdv').textContent=(d.throbDown/1000).toFixed(1);
+      document.getElementById('throbLock').checked=localStorage.getItem('throbLock')=='1';
+      updateThrobLen();
       if(d.time) document.getElementById('devTime').textContent='Device time: '+d.time;
       updateUI();
     });
@@ -935,6 +964,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 )rawliteral";
 
 void handleRoot() {
+  // no-store: after an OTA, the new page's CSS/JS must not be masked by a
+  // browser-cached copy of the old UI (the "throb length is gone" confusion).
+  server.sendHeader("Cache-Control", "no-store");
   server.send(200, "text/html", INDEX_HTML);
 }
 
