@@ -62,7 +62,7 @@ Todo (Gate 1) to start it.
 ## Ready for Review
 
 - [ ] [FW/WEB] Alarm controls: configurable length (1-120 min) + throb up/down
-  times + turn-off-mid-throb reverts to the main mode light show. (PR #4;
+  times + turn-off-mid-throb reverts to the scheduled state. (PR #4;
   compiles clean; OTA-deploy + on-orb check after merge.)
 
 ## Done
