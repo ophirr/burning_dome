@@ -69,7 +69,7 @@ Todo (Gate 1) to start it.
   no-store so OTA UI changes aren't masked by a stale page. (PR #5; compiles
   clean; OTA after merge.)
 
-- [ ] [WEB] Move the "one throb ~= Xs" readout inline, left of the link toggle. (PR #6; cosmetic; compiles clean.)
+- ~~[ ] [WEB] Move the "one throb ~= Xs" readout inline, left of the link toggle. (PR #6; cosmetic; compiles clean.)~~ (done 2026-07-10)
 
 ## Done
 
