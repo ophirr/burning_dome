@@ -69,6 +69,8 @@ Todo (Gate 1) to start it.
   no-store so OTA UI changes aren't masked by a stale page. (PR #5; compiles
   clean; OTA after merge.)
 
+- [ ] [WEB] Move the "one throb ~= Xs" readout inline, left of the link toggle. (PR #6; cosmetic; compiles clean.)
+
 ## Done
 
 _HUMAN-ONLY gate. A card lands here via a MERGED PR ([FW]/[WEB]) or a bench
