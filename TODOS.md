@@ -56,7 +56,7 @@ Todo (Gate 1) to start it.
 
 Merged and awaiting your Done move - the agent never writes Done (done-gate.sh).
 
-- [ ] [FW] NG-1 off-state glitch guard. VCC-dip event detector + nightly
+- ~~[ ] [FW] NG-1 off-state glitch guard. VCC-dip event detector + nightly~~ (done 2026-07-10)
   21:00-23:00 PST safety re-dark. (merged; PR #2; OTA-deployed 2026-07-10 -
   glitchEvents/vcc live in /status.) (detail: NG-1)
 - [ ] [WEB] Mode selector -> dropdown (the button row is now a `<select>`).
