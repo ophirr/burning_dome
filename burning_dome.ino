@@ -18,6 +18,11 @@
 #include <time.h>
 #include <LittleFS.h>
 
+// Read the internal VDD rail (ESP.getVcc()) instead of the A0 pin. A0 is unused
+// (only the archived pot sketches read it). Powers the NG-1 glitch guard, which
+// treats a VCC dip as a supply-transient event. Must be at file scope.
+ADC_MODE(ADC_VCC);
+
 // ---- Pin Configuration ----
 #define PIXEL_PIN     2     // GPIO2 -- NeoPixel data
 #define PIXEL_COUNT   24
@@ -103,6 +108,29 @@ int lastWeatherFetchYday = -1;         // tm_yday of last prefetch -> fetch once
 uint32_t weatherColor = 0;             // resolved throb color from last fetch
 bool weatherValid = false;             // true once a fetch has succeeded
 
+// ---- NeoPixel off-state glitch guard (NG-1) ----
+// A nearby inductive load (fan) injects a supply transient the idle WS2812s
+// latch as a dim glow while the orb is off (we stop refreshing). We can't read
+// the strip, so we detect the CONDUCTED transient as a VCC dip -> an EVENT
+// (counted + timestamped) that re-asserts dark. A radiated glitch leaves no VCC
+// trace, so a bounded safety re-dark runs nightly as a fallback.
+#define VCC_SAMPLE_MS         20        // sample VCC this often (catch brief dips)
+#define VCC_WARMUP_SAMPLES    250       // ~5 s to settle the baseline before arming
+#define VCC_DIP_MV            120       // a sample this far below baseline = event
+#define VCC_EVENT_DEBOUNCE_MS 800       // ignore repeat events within this window
+#define SAFETY_DARK_START_MIN (21*60)   // 21:00 PST -- nightly safety re-dark window
+#define SAFETY_DARK_STOP_MIN  (23*60)   // 23:00 PST -- window end
+#define SAFETY_DARK_INTERVAL_MS 15000UL // re-dark cadence inside the window
+
+unsigned long lastVccSampleMs = 0;
+uint16_t vccBaseline = 3000;           // rolling mV baseline (EMA), seeded ~3.0 V
+uint16_t vccMin = 4000;                // lowest sample seen since boot (telemetry)
+uint16_t vccLast = 0;                  // most recent sample
+uint16_t vccSamples = 0;               // warmup counter (saturates)
+uint16_t glitchEvents = 0;             // # of detected supply-dip events
+unsigned long lastGlitchMs = 0;        // millis() of last event (0 = none)
+unsigned long lastSafetyDarkMs = 0;    // last nightly safety re-dark
+
 // ---- Forward Declarations ----
 void startShow(int mode);
 void resetAnimationState();
@@ -131,6 +159,8 @@ void handleGetAlarm();
 void handleSetAlarm();
 void handleSetThrob();
 void handleFlashInfo();
+void pollGlitchGuard();
+void maybeSafetyDark();
 
 // ---- Update ticker to match current speed ----
 void updateTickerSpeed() {
@@ -224,6 +254,9 @@ void loop() {
   server.handleClient();
   yield();
 
+  // === NG-1: watch VDD for a supply-transient event (self-rate-limited) ===
+  pollGlitchGuard();
+
   // === Schedule + alarm check -- once per second ===
   if (millis() - lastScheduleCheck >= 1000) {
     lastScheduleCheck = millis();
@@ -234,6 +267,7 @@ void loop() {
     // Schedule yields to an active alarm throb (the alarm overrides on/off)
     if (scheduleEnabled && !alarmActive) checkSchedule();
     if (alarmEnabled) checkAlarm();
+    maybeSafetyDark();   // NG-1 fallback: nightly re-dark for radiated glitches
   }
 
   // === LED update -- only when timer flag is set ===
@@ -343,6 +377,51 @@ void allColor(uint32_t c) {
     strip.setPixelColor(i, c);
   }
   strip.show();
+}
+
+// ==========================================================
+// NeoPixel off-state glitch guard (NG-1)
+// ==========================================================
+
+// Sample VDD; a sample well below the rolling baseline is a conducted supply
+// transient (the fan). Count it, and re-assert dark when we are supposed to be
+// off (a throb/animation already refreshes every frame, so a glitch there is
+// overwritten anyway). Self-rate-limited to VCC_SAMPLE_MS.
+void pollGlitchGuard() {
+  unsigned long nowMs = millis();
+  if (nowMs - lastVccSampleMs < VCC_SAMPLE_MS) return;
+  lastVccSampleMs = nowMs;
+
+  uint16_t v = ESP.getVcc();
+  vccLast = v;
+  if (v < vccMin) vccMin = v;
+  vccBaseline = (uint16_t)(((uint32_t)vccBaseline * 15 + v) / 16);   // slow EMA
+
+  if (vccSamples < VCC_WARMUP_SAMPLES) { vccSamples++; return; }     // let baseline settle
+
+  if (v + VCC_DIP_MV < vccBaseline &&
+      (lastGlitchMs == 0 || nowMs - lastGlitchMs > VCC_EVENT_DEBOUNCE_MS)) {
+    glitchEvents++;
+    lastGlitchMs = nowMs;
+    if (!orbOn && !alarmActive) allColor(0);   // clear any latched glow
+    if (DEBUG_ENABLED) Serial.printf("NG-1: dip %u mV (base %u) event #%u\n",
+                                     (unsigned)(vccBaseline - v), vccBaseline, glitchEvents);
+  }
+}
+
+// Fallback for RADIATED glitches the VCC probe can't see: while off and NTP-
+// synced, between 21:00-23:00 PST re-push the dark frame every ~15 s. Bounded to
+// the window on purpose - not a 24/7 re-blit.
+void maybeSafetyDark() {
+  if (orbOn || alarmActive) return;
+  time_t now = time(nullptr);
+  if (now < 100000) return;                    // need NTP
+  struct tm* t = localtime(&now);
+  int nowMin = t->tm_hour * 60 + t->tm_min;
+  if (nowMin < SAFETY_DARK_START_MIN || nowMin >= SAFETY_DARK_STOP_MIN) return;
+  if (millis() - lastSafetyDarkMs < SAFETY_DARK_INTERVAL_MS) return;
+  lastSafetyDarkMs = millis();
+  allColor(0);
 }
 
 // ==========================================================
@@ -911,6 +990,15 @@ void handleStatus() {
   json += alarmActive ? "true" : "false";
   json += ",\"throbMs\":";
   json += throbPeriodMs;
+  // NG-1 glitch guard telemetry
+  json += ",\"glitchEvents\":";
+  json += glitchEvents;
+  json += ",\"vcc\":";
+  json += vccLast;
+  json += ",\"vccBaseline\":";
+  json += vccBaseline;
+  json += ",\"vccMin\":";
+  json += vccMin;
   // Current device time
   time_t now = time(nullptr);
   if (now > 100000) {
