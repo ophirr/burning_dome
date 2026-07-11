@@ -71,6 +71,8 @@ Todo (Gate 1) to start it.
 
 - ~~[ ] [WEB] Move the "one throb ~= Xs" readout inline, left of the link toggle. (PR #6; cosmetic; compiles clean.)~~ (done 2026-07-10)
 
+- [ ] [FW/WEB] Flip weather colors (grey=cloudy, blue=rain/fog) + simplify throb control to "one throb ~= Xs" + a bare mirror checkbox. (PR #7; compiles clean.)
+
 ## Done
 
 _HUMAN-ONLY gate. A card lands here via a MERGED PR ([FW]/[WEB]) or a bench
