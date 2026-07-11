@@ -700,10 +700,11 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   #alarmLen { background: linear-gradient(to right, #0f3460, #e94560); accent-color: #e94560; }
   #throbUp { background: linear-gradient(to right, #0f3460, #feca57); accent-color: #feca57; }
   #throbDown { background: linear-gradient(to right, #feca57, #0f3460); accent-color: #feca57; }
-  .link { float: right; font-size: 12px; font-weight: 400; color: #9a9a9a; cursor: pointer; }
+  .throbmeta { float: right; display: inline-flex; align-items: center; gap: 10px; }
+  #throbLen { font-size: 12px; color: #9a9a9a; }
+  .link { font-size: 12px; font-weight: 400; color: #9a9a9a; cursor: pointer; }
   .link input { vertical-align: -2px; margin-right: 3px; accent-color: #feca57; }
   .hintlbl { font-size: 11px; font-weight: 400; color: #667; }
-  #throbLen { font-size: 12px; color: #9a9a9a; margin: 2px 2px 0; }
   #brightSlider { background: linear-gradient(to right, #222, #fff);
          accent-color: #e94560; }
   .swatch { width: 48px; height: 48px; border-radius: 50%; border: 3px solid #fff;
@@ -790,7 +791,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </div>
   <div class='slider-wrap'>
     <label>Throb up: <span id='tuv'>1.5</span>s
-      <label class='link'><input type='checkbox' id='throbLock' onchange='onLock()'> link up+down</label>
+      <span class='throbmeta'><span id='throbLen'>one throb &#8776; 3.0 s</span><label class='link'><input type='checkbox' id='throbLock' onchange='onLock()'> link up+down</label></span>
     </label>
     <input type='range' min='300' max='6000' step='100' value='1500' id='throbUp'
       oninput="onThrob('up')" onchange='sendThrob()'>
@@ -800,7 +801,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <input type='range' min='300' max='6000' step='100' value='1500' id='throbDown'
       oninput="onThrob('down')" onchange='sendThrob()'>
   </div>
-  <div id='throbLen'>one throb &#8776; 3.0 s</div>
   <div id='alarmHint' style='font-size:12px;color:#888;margin-top:8px'>
     Gentle throb at alarm time in today's weather color:
     <span style='color:#ffbe00'>&#9679; sunny</span>
