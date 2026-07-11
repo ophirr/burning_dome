@@ -83,7 +83,7 @@ unsigned long lastScheduleCheck = 0;
 
 // ---- Weather-Alarm State (WATG-1/2/3) ----
 // At a set alarm time the orb does a gentle throb whose COLOR encodes today's
-// weather (yellow=sunny, blue=cloudy, grey=rain/fog), fetched keyless over plain
+// weather (yellow=sunny, grey=cloudy, blue=rain/fog), fetched keyless over plain
 // HTTP from Open-Meteo. Alarm length + throb up/down times are runtime-set.
 #define WEATHER_PREFETCH_MIN  30                 // fetch this many min before alarm
 #define THROB_TICK_MS    40                      // fast ticker while throbbing (smooth curve)
@@ -534,8 +534,8 @@ void checkSchedule() {
 // RGB values are first-pass; calibrate on the actual fiber bundle.
 uint32_t weatherCodeToColor(int code) {
   if (code <= 1)  return strip.Color(255, 190, 0);  // 0-1 clear     -> yellow (sunny)
-  if (code <= 3)  return strip.Color(0, 70, 255);   // 2-3 cloudy    -> blue
-  return strip.Color(90, 90, 90);                    // fog/rain/etc  -> grey
+  if (code <= 3)  return strip.Color(90, 90, 90);   // 2-3 cloudy    -> grey
+  return strip.Color(0, 70, 255);                    // fog/rain/etc  -> blue
 }
 
 // Fetch current conditions from Open-Meteo over PLAIN HTTP (keyless, no
@@ -701,9 +701,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   #throbUp { background: linear-gradient(to right, #0f3460, #feca57); accent-color: #feca57; }
   #throbDown { background: linear-gradient(to right, #feca57, #0f3460); accent-color: #feca57; }
   .throbmeta { float: right; display: inline-flex; align-items: center; gap: 10px; }
-  #throbLen { font-size: 12px; color: #9a9a9a; }
-  .link { font-size: 12px; font-weight: 400; color: #9a9a9a; cursor: pointer; }
-  .link input { vertical-align: -2px; margin-right: 3px; accent-color: #feca57; }
+  #throbLen { font-size: 14px; color: #eee; }
+  .mirror { font-size: 12px; font-weight: 400; color: #9a9a9a; cursor: pointer; }
+  #throbLock { accent-color: #feca57; cursor: pointer; vertical-align: -2px; margin-right: 3px; }
   .hintlbl { font-size: 11px; font-weight: 400; color: #667; }
   #brightSlider { background: linear-gradient(to right, #222, #fff);
          accent-color: #e94560; }
@@ -791,7 +791,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </div>
   <div class='slider-wrap'>
     <label>Throb up: <span id='tuv'>1.5</span>s
-      <span class='throbmeta'><span id='throbLen'>one throb &#8776; 3.0 s</span><label class='link'><input type='checkbox' id='throbLock' onchange='onLock()'> link up+down</label></span>
+      <span class='throbmeta'><span id='throbLen'>one throb &#8776; 3.0 s</span><label class='mirror'><input type='checkbox' id='throbLock' onchange='onLock()'> mirror sliders</label></span>
     </label>
     <input type='range' min='300' max='6000' step='100' value='1500' id='throbUp'
       oninput="onThrob('up')" onchange='sendThrob()'>
@@ -804,8 +804,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <div id='alarmHint' style='font-size:12px;color:#888;margin-top:8px'>
     Gentle throb at alarm time in today's weather color:
     <span style='color:#ffbe00'>&#9679; sunny</span>
-    <span style='color:#3a7bff'>&#9679; cloudy</span>
-    <span style='color:#9a9a9a'>&#9679; rain/fog</span>
+    <span style='color:#9a9a9a'>&#9679; cloudy</span>
+    <span style='color:#3a7bff'>&#9679; rain/fog</span>
   </div>
 </div>
 
