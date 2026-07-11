@@ -45,16 +45,7 @@ Todo (Gate 1) to start it.
 
 ## In Progress
 
-- [~] [FW] NG-1 off-state glitch guard. VCC-dip EVENT detector (ADC_MODE(ADC_VCC);
-  a dip past a rolling baseline = a conducted-transient event -> bump
-  glitchEvents + re-assert dark; expose glitchEvents/vcc/baseline/min in /status)
-  + a nightly 21:00-23:00 PST safety re-dark for the radiated case the VCC probe
-  can't see. AC: glitchEvents increments when the fan switches on; the off-strip
-  glow clears; compiles clean. (branch: ng1-glitch-guard; detail: NG-1)
-- [~] [WEB] Mode selector -> dropdown. Replace the row of mode buttons at the top
-  with a single `<select>`. AC: choosing a mode from the dropdown sets it (fires
-  `/mode?m=`); the dropdown reflects the current mode on load/sync; the button
-  row is gone; other controls unchanged. (branch: mode-dropdown)
+- (none)
 
 ## Held
 
@@ -63,18 +54,23 @@ Todo (Gate 1) to start it.
 
 ## Ready for Review
 
-- (empty)
+Merged and awaiting your Done move - the agent never writes Done (done-gate.sh).
+
+- [ ] [FW] NG-1 off-state glitch guard. VCC-dip event detector + nightly
+  21:00-23:00 PST safety re-dark. (merged; PR #2; OTA-deployed 2026-07-10 -
+  glitchEvents/vcc live in /status.) (detail: NG-1)
+- [ ] [WEB] Mode selector -> dropdown (the button row is now a `<select>`).
+  (merged; PR #3; OTA-deployed 2026-07-10.)
+- [ ] [FW] Weather-alarm throb glow (WATG-1/2/3) + runtime throb-speed + flash
+  gate. (merged; PR #1; throb + weather color confirmed on the orb.)
 
 ## Done
 
-_Cards arrive here via a MERGED PR ([FW]/[WEB]) or a human bench sign-off
-([BENCH]/[FAB]/[CAL]). Bulk shipped history lives in git + BUILD_LOG.md._
+_HUMAN-ONLY gate. A card lands here via a MERGED PR ([FW]/[WEB]) or a bench
+sign-off ([BENCH]/[FAB]/[CAL]) - moved by Ophir, never the agent (done-gate.sh).
+Bulk shipped history lives in git + BUILD_LOG.md._
 
-- ~~[FW] Weather-alarm throb glow (WATG-1/2/3) + runtime throb-speed + flash
-  gate~~ (done 2026-07-10; PR #1 merged. At a set alarm the orb throbs 30 min in
-  the day's weather color, keyless Open-Meteo over HTTP; throb speed 1-8 s via a
-  web slider; /flashinfo canary + gated flash.sh + block-raw-flash hook. Throb +
-  weather color confirmed on the physical orb.)
+- (none yet - yours to populate)
 
 ## Detail
 
