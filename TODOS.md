@@ -62,8 +62,12 @@ Todo (Gate 1) to start it.
 ## Ready for Review
 
 - [ ] [FW/WEB] Alarm controls: configurable length (1-120 min) + throb up/down
-  times + turn-off-mid-throb reverts to the scheduled state. (PR #4;
-  compiles clean; OTA-deploy + on-orb check after merge.)
+  times + turn-off-mid-throb reverts to the scheduled state. (PR #4 merged +
+  OTA-deployed.)
+- [ ] [FW/WEB] Alarm UI clarity: rename to "Alarm duration", derived "one throb
+  ~= Xs" readout, link toggle mirroring throb up/down, and Cache-Control:
+  no-store so OTA UI changes aren't masked by a stale page. (PR #5; compiles
+  clean; OTA after merge.)
 
 ## Done
 
