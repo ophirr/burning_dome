@@ -666,6 +666,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   .b3 { background: #0f3460; }
   .b4 { background: linear-gradient(135deg, #0f3460, #e94560); }
   .active { outline: 3px solid #fff; outline-offset: 2px; }
+  #modeSel { width: 100%; padding: 12px; font-size: 16px; border-radius: 8px;
+         background: #0f3460; color: #eee; border: 1px solid #444; -webkit-appearance: none;
+         appearance: none; text-align: center; }
   .dim { opacity: 0.35; pointer-events: none; }
   .slider-wrap { margin: 14px 0; }
   .slider-wrap label { display: block; margin-bottom: 6px; font-size: 14px; }
@@ -707,13 +710,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 </div>
 
 <div class='card' id='modes'>
-  <div style='text-align:center'>
-    <a class='btn b0' onclick='setMode(0)' id='m0'>Rainbow Cycle</a>
-    <a class='btn b1' onclick='setMode(1)' id='m1'>Solid Color</a>
-    <a class='btn b2' onclick='setMode(2)' id='m2'>Rainbow</a>
-    <a class='btn b3' onclick='setMode(3)' id='m3'>Theater Chase</a>
-    <a class='btn b4' onclick='setMode(4)' id='m4'>Theater Rainbow</a>
-  </div>
+  <select id='modeSel' onchange='setMode(this.value)'>
+    <option value='0'>Rainbow Cycle</option>
+    <option value='1'>Solid Color</option>
+    <option value='2'>Rainbow</option>
+    <option value='3'>Theater Chase</option>
+    <option value='4'>Theater Rainbow</option>
+  </select>
 </div>
 
 <div class='card' id='sliders'>
@@ -809,15 +812,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     updateUI();
   }
 
-  function setMode(m){
-    fetch('/mode?m='+m).then(function(){
-      for(var i=0;i<5;i++){
-        var el=document.getElementById('m'+i);
-        if(i==m) el.classList.add('active');
-        else el.classList.remove('active');
-      }
-    });
-  }
+  function setMode(m){ fetch('/mode?m='+m); }
 
   // Poll sliders using requestAnimationFrame + throttled sends
   // rAF runs during touch on iOS, setInterval does not
@@ -873,11 +868,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       lastBrt=d.brightness;
       document.getElementById('brightSlider').value=d.brightness;
       document.getElementById('bv').textContent=d.brightness;
-      for(var i=0;i<5;i++){
-        var el=document.getElementById('m'+i);
-        if(i==d.mode) el.classList.add('active');
-        else el.classList.remove('active');
-      }
+      document.getElementById('modeSel').value=d.mode;
       // Schedule
       document.getElementById('schedEn').checked=d.schedEn;
       document.getElementById('schedStart').value=pad2(d.sh)+':'+pad2(d.sm);
